@@ -120,7 +120,7 @@ st.markdown("""
 # --- PASSWORD SECURITY GATE ---
 def check_password():
     """Returnerer True hvis brugeren har indtastet den rigtige adgangskode."""
-    correct_password = os.getenv("AGENT_PASSWORD", "mm2026")
+    correct_password = os.getenv("AGENT_PASSWORD", "mm2020")
     if "AGENT_PASSWORD" in st.secrets:
         correct_password = st.secrets["AGENT_PASSWORD"]
         
