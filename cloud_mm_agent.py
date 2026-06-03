@@ -255,7 +255,7 @@ if not st.session_state["msal_token"]:
                     st.session_state["msal_cache"] = cache
                     st.rerun()
                 else:
-                    st.error("❌ Kunne ikke oprette forbindelse til Microsoft login-serveren.")
+                    st.error(f"❌ Kunne ikke oprette forbindelse til Microsoft login-serveren. Detaljer: {flow}")
         else:
             flow = st.session_state["device_flow"]
             st.markdown(f"""
