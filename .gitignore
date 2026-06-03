@@ -1,0 +1,15 @@
+# Ignore virtual environment
+venv/
+.venv/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore local environment files and settings
+.env
+.streamlit/
+*.json
+token_cache.bin
