@@ -466,48 +466,51 @@ with st.sidebar:
             st.caption("For at slippe for at logge ind med Microsoft i fremtiden, kan du kopiere denne kode og tilføje den til dine Streamlit Secrets under navnet 'MS_TOKEN_CACHE':")
             st.text_area("Token Cache Kode", value=st.session_state["new_cache_b64"], height=100)
 
-# --- CHAT BRUGERFLADE ---
+# --- HOVED BRUGERFLADE MED TABS ---
 st.write(f"<h1>🚢 Overmaskinmesteren <span style='font-size: 16px; color: #5bc0be;'>Cloud Edition</span></h1>", unsafe_allow_html=True)
 st.write("<p style='color: #888; font-style: italic;'>Ligeværdig, tung faglig sparring til maskinmesteren</p>", unsafe_allow_html=True)
 
-if "messages" not in st.session_state:
-    st.session_state["messages"] = []
+tab1, tab2 = st.tabs(["💬 Sparring (Chat)", f"🗄️ Erfaringsdatabase ({len(erfaringer)} stk)"])
 
-# Vis tidligere beskeder
-for msg in st.session_state["messages"]:
-    role_class = "chat-bubble-user" if msg["role"] == "user" else "chat-bubble-agent"
-    role_name = "Dig" if msg["role"] == "user" else "Overmaskinmesteren"
-    st.markdown(f"""
-        <div class="{role_class}">
-            <strong>👤 {role_name}:</strong><br>
-            {msg["content"]}
-        </div>
-    """, unsafe_allow_html=True)
-    if "sources" in msg and msg["sources"]:
-        st.write(f"<span style='font-size: 12px; color: #888;'>📚 Kilder: {', '.join(msg['sources'])}</span>", unsafe_allow_html=True)
+with tab1:
+    if "messages" not in st.session_state:
+        st.session_state["messages"] = []
 
-# Inputfelt
-if prompt := st.chat_input("Hvad oplever du af udfordringer i maskinrummet i dag?"):
-    # Vis brugerens besked
-    st.markdown(f"""
-        <div class="chat-bubble-user">
-            <strong>👤 Dig:</strong><br>
-            {prompt}
-        </div>
-    """, unsafe_allow_html=True)
-    st.session_state["messages"].append({"role": "user", "content": prompt})
-    
-    # 1. RAG-SØGNING I HUKOMMELSEN
-    with st.spinner("🔍 Gennemsøger OneNote og Filer..."):
-        context, sources = scan_knowledge_in_memory(prompt, onenote_index, filer_index)
+    # Vis tidligere beskeder
+    for msg in st.session_state["messages"]:
+        role_class = "chat-bubble-user" if msg["role"] == "user" else "chat-bubble-agent"
+        role_name = "Dig" if msg["role"] == "user" else "Overmaskinmesteren"
+        st.markdown(f"""
+            <div class="{role_class}">
+                <strong>👤 {role_name}:</strong><br>
+                {msg["content"]}
+            </div>
+        """, unsafe_allow_html=True)
+        if "sources" in msg and msg["sources"]:
+            st.write(f"<span style='font-size: 12px; color: #888;'>📚 Kilder: {', '.join(msg['sources'])}</span>", unsafe_allow_html=True)
+
+    # Inputfelt
+    if prompt := st.chat_input("Hvad oplever du af udfordringer i maskinrummet i dag?"):
+        # Vis brugerens besked
+        st.markdown(f"""
+            <div class="chat-bubble-user">
+                <strong>👤 Dig:</strong><br>
+                {prompt}
+            </div>
+        """, unsafe_allow_html=True)
+        st.session_state["messages"].append({"role": "user", "content": prompt})
         
-    # 2. GEMINI SVAR GENERERING
-    if not GEMINI_API_KEY:
-        st.error("❌ Gemini API-nøglen mangler. Kan ikke generere svar.")
-    else:
-        with st.spinner("🧠 Overmaskinmesteren analyserer kilder og ræsonnerer..."):
-            try:
-                full_prompt = f"""{SYSTEM_INSTRUCTION}
+        # 1. RAG-SØGNING I HUKOMMELSEN
+        with st.spinner("🔍 Gennemsøger OneNote og Filer..."):
+            context, sources = scan_knowledge_in_memory(prompt, onenote_index, filer_index)
+            
+        # 2. GEMINI SVAR GENERERING
+        if not GEMINI_API_KEY:
+            st.error("❌ Gemini API-nøglen mangler. Kan ikke generere svar.")
+        else:
+            with st.spinner("🧠 Overmaskinmesteren analyserer kilder og ræsonnerer..."):
+                try:
+                    full_prompt = f"""{SYSTEM_INSTRUCTION}
 
 RÅ TEKNISK DATA FRA DINE FILER OG NOTER:
 {context}
@@ -516,33 +519,66 @@ SPØRGSMÅL FRA MASKINMESTER STEFAN:
 {prompt}
 
 SVAR:"""
-                
-                selected_model = st.session_state.get("selected_model", "gemini-2.5-flash")
-                model = genai.GenerativeModel(selected_model)
-                response = model.generate_content(full_prompt)
-                svar_tekst = response.text
-                
-                # Vis svaret
+                    
+                    selected_model = st.session_state.get("selected_model", "gemini-2.5-flash")
+                    model = genai.GenerativeModel(selected_model)
+                    response = model.generate_content(full_prompt)
+                    svar_tekst = response.text
+                    
+                    # Vis svaret
+                    st.markdown(f"""
+                        <div class="chat-bubble-agent">
+                            <strong>🚢 Overmaskinmesteren:</strong><br>
+                            {svar_tekst}
+                        </div>
+                    """, unsafe_allow_html=True)
+                    
+                    if sources:
+                        st.write(f"<span style='font-size: 12px; color: #888;'>📚 Kilder: {', '.join(sources)}</span>", unsafe_allow_html=True)
+                    
+                    # Gem besked
+                    st.session_state["messages"].append({
+                        "role": "assistant",
+                        "content": svar_tekst,
+                        "sources": sources
+                    })
+                    
+                    # Gem erfaringen i OneDrive databasen til mekanisk selvlæring
+                    gem_erfaring_onedrive(prompt, svar_tekst, st.session_state["msal_token"])
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"❌ Fejl under generering af svar: {e}")
+
+with tab2:
+    st.write("### 🗄️ Administrer Gemte Erfaringer")
+    st.write("Her kan du se din database af erfaringer (gemt på din OneDrive). Du kan slette enkelte erfaringer, hvis du vil rette fejl eller fjerne forældede svar fra agentens hukommelse.")
+    
+    if not erfaringer:
+        st.info("Der er endnu ikke gemt nogen erfaringer i databasen.")
+    else:
+        # Vis erfaringer (nyeste først)
+        for idx, erf in reversed(list(enumerate(erfaringer))):
+            with st.container():
                 st.markdown(f"""
-                    <div class="chat-bubble-agent">
-                        <strong>🚢 Overmaskinmesteren:</strong><br>
-                        {svar_tekst}
-                    </div>
+                <div style="background-color: #1c2541; padding: 15px; border-radius: 8px; border: 1px solid #3a506b; margin-bottom: 10px; color: #e0e1dd;">
+                    <span style="color: #5bc0be; font-size: 12px; font-weight: bold;">📅 {erf.get('timestamp', 'Ukendt tidspunkt')}</span><br><br>
+                    <strong>👤 Spørgsmål:</strong><br>
+                    <p style="color: #e0e1dd; margin-left: 10px; font-style: italic;">"{erf['sporgsmal']}"</p>
+                    <strong>🚢 Svar:</strong><br>
+                    <p style="color: #e0e1dd; margin-left: 10px; white-space: pre-wrap;">{erf['svar']}</p>
+                </div>
                 """, unsafe_allow_html=True)
                 
-                if sources:
-                    st.write(f"<span style='font-size: 12px; color: #888;'>📚 Kilder: {', '.join(sources)}</span>", unsafe_allow_html=True)
-                
-                # Gem besked
-                st.session_state["messages"].append({
-                    "role": "assistant",
-                    "content": svar_tekst,
-                    "sources": sources
-                })
-                
-                # Gem erfaringen i OneDrive databasen til mekanisk selvlæring
-                gem_erfaring_onedrive(prompt, svar_tekst, st.session_state["msal_token"])
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"❌ Fejl under generering af svar: {e}")
+                # Slet-knap til denne specifikke erfaring
+                if st.button(f"Slet denne erfaring 🗑️", key=f"del_erf_{idx}"):
+                    erfaringer.pop(idx)
+                    # Tving nulstilling af cache og upload til OneDrive
+                    st.cache_data.clear()
+                    data_bytes = json.dumps(erfaringer, ensure_ascii=False, indent=2).encode('utf-8')
+                    if upload_to_onedrive("erfaringer.json", data_bytes, st.session_state["msal_token"]):
+                        st.success("✅ Erfaring slettet fra OneDrive!")
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error("❌ Kunne ikke slette erfaring fra OneDrive. Tjek forbindelsen.")
