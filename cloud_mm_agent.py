@@ -501,7 +501,7 @@ SPØRGSMÅL FRA MASKINMESTER STEFAN:
 
 SVAR:"""
                 
-                model = genai.GenerativeModel('gemini-1.5-pro')
+                model = genai.GenerativeModel('gemini-2.5-pro')
                 response = model.generate_content(full_prompt)
                 svar_tekst = response.text
                 
