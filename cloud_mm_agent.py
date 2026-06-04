@@ -411,6 +411,22 @@ with st.sidebar:
         
     st.write("---")
     
+    # Modelvælger
+    st.write("### 🧠 Vælg Model")
+    st.selectbox(
+        "Hjerne",
+        options=["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-3.5-flash"],
+        format_func=lambda x: {
+            "gemini-2.5-flash": "Gemini 2.5 Flash ⚡ (Gratis & Hurtig)",
+            "gemini-2.5-pro": "Gemini 2.5 Pro 🧠 (Kræver Billing)",
+            "gemini-2.0-flash": "Gemini 2.0 Flash 🚄 (Hurtig)",
+            "gemini-3.5-flash": "Gemini 3.5 Flash 🚀 (Nyeste Preview)"
+        }.get(x, x),
+        key="selected_model"
+    )
+    
+    st.write("---")
+    
     # Metadata info
     st.write(f"📂 **OneNote chunks:** {len(onenote_index)} stk")
     st.write(f"📁 **Fil chunks:** {len(filer_index)} stk")
@@ -501,7 +517,8 @@ SPØRGSMÅL FRA MASKINMESTER STEFAN:
 
 SVAR:"""
                 
-                model = genai.GenerativeModel('gemini-2.5-pro')
+                selected_model = st.session_state.get("selected_model", "gemini-2.5-flash")
+                model = genai.GenerativeModel(selected_model)
                 response = model.generate_content(full_prompt)
                 svar_tekst = response.text
                 
