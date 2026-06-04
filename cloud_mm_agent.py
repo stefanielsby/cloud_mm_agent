@@ -314,11 +314,12 @@ def load_erfaringer_onedrive(token):
 
 erfaringer = load_erfaringer_onedrive(st.session_state["msal_token"])
 
-def gem_erfaring_onedrive(sporgsmal, svar, token):
-    """Tilføjer en erfaring og uploader den opdaterede JSON til OneDrive."""
+def gem_erfaring_onedrive(sporgsmal, svar, emne, token):
+    """Tilføjer en erfaring med emne/kategori og uploader den opdaterede JSON til OneDrive."""
     global erfaringer
     erfaringer.append({
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "emne": emne,
         "sporgsmal": sporgsmal,
         "svar": svar
     })
@@ -332,7 +333,19 @@ def gem_erfaring_onedrive(sporgsmal, svar, token):
 def generate_excel(erfaringer_list):
     df = pd.DataFrame(erfaringer_list)
     if not df.empty:
-        df.columns = ["Tidspunkt", "Spørgsmål", "Svar"]
+        cols = []
+        for col in ["timestamp", "emne", "sporgsmal", "svar"]:
+            if col in df.columns:
+                cols.append(col)
+        df = df[cols]
+        
+        rename_dict = {
+            "timestamp": "Tidspunkt",
+            "emne": "Emne / Kategori",
+            "sporgsmal": "Spørgsmål",
+            "svar": "Svar"
+        }
+        df = df.rename(columns=rename_dict)
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name="Erfaringer")
@@ -371,6 +384,21 @@ def scan_knowledge_in_memory(query, onenote_idx, filer_idx, top_k=10):
         if score > 0:
             scored_chunks.append({"text": text, "source": item["source"], "score": score})
             
+    # 3. Scan Erfaringer (gemte erfaringer fra OneDrive)
+    global erfaringer
+    for item in erfaringer:
+        sporgsmal = item.get("sporgsmal", "")
+        svar = item.get("svar", "")
+        emne = item.get("emne", "Generelt")
+        text = f"Emne: {emne}\nSpørgsmål: {sporgsmal}\nSvar: {svar}"
+        text_lower = text.lower()
+        score = 0
+        for term in search_terms:
+            if len(term) >= 2 and term in text_lower:
+                score += 1.5  # Gemte erfaringer vægtes også højt
+        if score > 0:
+            scored_chunks.append({"text": text, "source": f"Erfaringer (Emne: {emne})", "score": score})
+            
     # Sorter efter score
     best_chunks = sorted(scored_chunks, key=lambda x: x["score"], reverse=True)[:top_k]
     
@@ -396,6 +424,12 @@ Derfor skal du:
 3. Ræsonnere dybt på tværs af data. Hvis du får givet flere kilder med tabeller (f.eks. komponent-indstillinger ét sted og driftsdata et andet sted), så krydsreferér dem aktivt for at give et præcist svar.
 4. Spænde bredt over el, automation, hydraulik, termodynamik og fejlfinding helt ned på printkort- og komponentniveau.
 """
+
+# --- INITIALISER CHAT-TRÅDE (SESSION STATE) ---
+if "threads" not in st.session_state:
+    st.session_state["threads"] = {"Generelt": []}
+if "active_thread" not in st.session_state:
+    st.session_state["active_thread"] = "Generelt"
 
 # --- SIDEBAR (KONTROL-PANEL) ---
 with st.sidebar:
@@ -434,6 +468,57 @@ with st.sidebar:
     
     st.write("---")
     
+    # Samtaler (Tråde) sektion i sidebar
+    st.write("### 💬 Samtaler (Tråde)")
+    
+    active_threads = list(st.session_state["threads"].keys())
+    if st.session_state["active_thread"] not in active_threads:
+        st.session_state["active_thread"] = active_threads[0]
+        
+    selected_thread = st.selectbox(
+        "Aktiv chat:",
+        options=active_threads,
+        index=active_threads.index(st.session_state["active_thread"]),
+        key="thread_selector"
+    )
+    st.session_state["active_thread"] = selected_thread
+    
+    # Opret ny tråd
+    with st.expander("➕ Opret/Resume tråd", expanded=False):
+        # Ekstraher unikke emner fra erfaringer på OneDrive
+        unique_topics = sorted(list(set(erf.get("emne", "Generelt") for erf in erfaringer)))
+        if "Generelt" not in unique_topics:
+            unique_topics.insert(0, "Generelt")
+            
+        creation_mode = st.radio("Vælg:", ["Brug eksisterende emne", "Nyt emne"], key="creation_mode")
+        
+        if creation_mode == "Brug eksisterende emne":
+            new_thread_name = st.selectbox("Eksisterende:", options=unique_topics, key="existing_topic_select")
+        else:
+            new_thread_name = st.text_input("Nyt navn:", placeholder="F.eks. Fejlfinding Siemens", key="new_topic_input")
+            
+        if st.button("Opret & Skift 🚀", use_container_width=True):
+            if new_thread_name and new_thread_name.strip():
+                clean_name = new_thread_name.strip()
+                if clean_name not in st.session_state["threads"]:
+                    st.session_state["threads"][clean_name] = []
+                st.session_state["active_thread"] = clean_name
+                st.success(f"Tråd '{clean_name}' oprettet!")
+                time.sleep(0.5)
+                st.rerun()
+                
+    # Slet aktiv tråd (så længe der er mere end en)
+    if len(active_threads) > 1:
+        if st.button("Slet aktiv tråd 🗑️", use_container_width=True):
+            active = st.session_state["active_thread"]
+            del st.session_state["threads"][active]
+            st.session_state["active_thread"] = list(st.session_state["threads"].keys())[0]
+            st.success("Tråd slettet!")
+            time.sleep(0.5)
+            st.rerun()
+            
+    st.write("---")
+    
     # Synkroniser knap
     if st.button("Synkroniser skyen 🔄", use_container_width=True):
         st.cache_data.clear()
@@ -454,9 +539,12 @@ with st.sidebar:
         
     st.write("---")
     
-    # Ryd chat-historik
+    # Ryd chat-historik for aktiv tråd
     if st.button("Ryd samtale 🧹", use_container_width=True):
-        st.session_state["messages"] = []
+        active = st.session_state["active_thread"]
+        st.session_state["threads"][active] = []
+        st.success(f"Tråden '{active}' er ryddet!")
+        time.sleep(0.5)
         st.rerun()
         
     # Hjælp til automatisk login (Streamlit Secrets)
@@ -473,11 +561,19 @@ st.write("<p style='color: #888; font-style: italic;'>Ligeværdig, tung faglig s
 tab1, tab2 = st.tabs(["💬 Sparring (Chat)", f"🗄️ Erfaringsdatabase ({len(erfaringer)} stk)"])
 
 with tab1:
-    if "messages" not in st.session_state:
-        st.session_state["messages"] = []
+    active_thread = st.session_state["active_thread"]
+    
+    st.markdown(f"""
+        <div style="background-color: #1c2541; padding: 10px; border-radius: 8px; border-left: 5px solid #5bc0be; margin-bottom: 15px;">
+            <span style="color: #888; font-size: 12px; text-transform: uppercase; font-weight: bold;">Aktiv samtale:</span><br>
+            <span style="color: #e0e1dd; font-size: 18px; font-weight: 600; font-family: 'Space Grotesk';">💬 {active_thread}</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    thread_messages = st.session_state["threads"].get(active_thread, [])
 
     # Vis tidligere beskeder
-    for idx, msg in enumerate(st.session_state["messages"]):
+    for idx, msg in enumerate(thread_messages):
         role_class = "chat-bubble-user" if msg["role"] == "user" else "chat-bubble-agent"
         role_name = "Dig" if msg["role"] == "user" else "Overmaskinmesteren"
         st.markdown(f"""
@@ -492,35 +588,47 @@ with tab1:
                 st.write(f"<span style='font-size: 12px; color: #888;'>📚 Kilder: {', '.join(msg['sources'])}</span>", unsafe_allow_html=True)
             
             # Knap til aktivt at gemme som erfaring
-            if idx > 0 and st.session_state["messages"][idx-1]["role"] == "user":
-                sporgsmal = st.session_state["messages"][idx-1]["content"]
+            if idx > 0 and thread_messages[idx-1]["role"] == "user":
+                sporgsmal = thread_messages[idx-1]["content"]
                 svar = msg["content"]
                 
-                is_saved = any(erf.get("sporgsmal") == sporgsmal for erf in erfaringer)
+                is_saved = any(erf.get("sporgsmal") == sporgsmal and erf.get("emne", "Generelt") == active_thread for erf in erfaringer)
                 
                 if is_saved:
                     st.markdown("<span style='font-size: 12px; color: #5bc0be; font-weight: bold; display: inline-block; margin-bottom: 10px;'>💾 Gemt som erfaring ✓</span>", unsafe_allow_html=True)
                 else:
-                    if st.button("Gem som erfaring 💾", key=f"save_erf_{idx}"):
-                        gem_erfaring_onedrive(sporgsmal, svar, st.session_state["msal_token"])
-                        st.success("✅ Erfaring gemt på OneDrive!")
+                    if st.button("Gem som erfaring 💾", key=f"save_erf_{active_thread}_{idx}"):
+                        gem_erfaring_onedrive(sporgsmal, svar, active_thread, st.session_state["msal_token"])
+                        st.success(f"✅ Erfaring gemt under emnet '{active_thread}' på OneDrive!")
                         time.sleep(0.5)
                         st.rerun()
 
     # Inputfelt
     if prompt := st.chat_input("Hvad oplever du af udfordringer i maskinrummet i dag?"):
-        # Vis brugerens besked
+        # Tilføj brugerens besked til session state
+        if active_thread not in st.session_state["threads"]:
+            st.session_state["threads"][active_thread] = []
+            
+        st.session_state["threads"][active_thread].append({"role": "user", "content": prompt})
+        
+        # Vis med det samme
         st.markdown(f"""
             <div class="chat-bubble-user">
                 <strong>👤 Dig:</strong><br>
                 {prompt}
             </div>
         """, unsafe_allow_html=True)
-        st.session_state["messages"].append({"role": "user", "content": prompt})
         
-        # 1. RAG-SØGNING I HUKOMMELSEN
-        with st.spinner("🔍 Gennemsøger OneNote og Filer..."):
-            context, sources = scan_knowledge_in_memory(prompt, onenote_index, filer_index)
+        # 1. RAG-SØGNING I HUKOMMELSEN (Kombinerer med forrige besked for bedre opfølgende spørgsmål)
+        history_messages = st.session_state["threads"][active_thread][:-1]
+        rag_query = prompt
+        if len(history_messages) >= 2:
+            last_user_msg = next((m for m in reversed(history_messages) if m["role"] == "user"), None)
+            if last_user_msg:
+                rag_query = f"{last_user_msg['content']} {prompt}"
+                
+        with st.spinner("🔍 Gennemsøger OneNote, Filer og Erfaringer..."):
+            context, sources = scan_knowledge_in_memory(rag_query, onenote_index, filer_index)
             
         # 2. GEMINI SVAR GENERERING
         if not GEMINI_API_KEY:
@@ -528,11 +636,20 @@ with tab1:
         else:
             with st.spinner("🧠 Overmaskinmesteren analyserer kilder og ræsonnerer..."):
                 try:
+                    # Format samtalehistorik til prompt (sidste 6 beskeder / 3 turns)
+                    history_text = ""
+                    recent_history = history_messages[-6:]
+                    if recent_history:
+                        history_text = "\nNylig samtalehistorik for at bevare kontekst:\n"
+                        for msg in recent_history:
+                            role_name = "Stefan" if msg["role"] == "user" else "Overmaskinmesteren"
+                            history_text += f"{role_name}: {msg['content']}\n"
+                            
                     full_prompt = f"""{SYSTEM_INSTRUCTION}
 
 RÅ TEKNISK DATA FRA DINE FILER OG NOTER:
 {context}
-
+{history_text}
 SPØRGSMÅL FRA MASKINMESTER STEFAN:
 {prompt}
 
@@ -543,24 +660,13 @@ SVAR:"""
                     response = model.generate_content(full_prompt)
                     svar_tekst = response.text
                     
-                    # Vis svaret
-                    st.markdown(f"""
-                        <div class="chat-bubble-agent">
-                            <strong>🚢 Overmaskinmesteren:</strong><br>
-                            {svar_tekst}
-                        </div>
-                    """, unsafe_allow_html=True)
-                    
-                    if sources:
-                        st.write(f"<span style='font-size: 12px; color: #888;'>📚 Kilder: {', '.join(sources)}</span>", unsafe_allow_html=True)
-                    
-                    # Gem besked
-                    st.session_state["messages"].append({
+                    # Tilføj til tråd-historik
+                    st.session_state["threads"][active_thread].append({
                         "role": "assistant",
                         "content": svar_tekst,
                         "sources": sources
-                    })
-                    
+                      })
+                      
                     st.rerun()
                     
                 except Exception as e:
@@ -568,33 +674,43 @@ SVAR:"""
 
 with tab2:
     st.write("### 🗄️ Administrer Gemte Erfaringer")
-    st.write("Her kan du se din database af erfaringer (gemt på din OneDrive). Du kan slette enkelte erfaringer, hvis du vil rette fejl eller fjerne forældede svar fra agentens hukommelse.")
+    st.write("Her kan du se din database af erfaringer (gemt på din OneDrive), grupperet efter emner/chats. Du kan folde hvert emne ud og slette enkelte erfaringer, hvis du vil rette fejl eller fjerne forældede svar.")
     
     if not erfaringer:
         st.info("Der er endnu ikke gemt nogen erfaringer i databasen.")
     else:
-        # Vis erfaringer (nyeste først)
-        for idx, erf in reversed(list(enumerate(erfaringer))):
-            with st.container():
-                st.markdown(f"""
-                <div style="background-color: #1c2541; padding: 15px; border-radius: 8px; border: 1px solid #3a506b; margin-bottom: 10px; color: #e0e1dd;">
-                    <span style="color: #5bc0be; font-size: 12px; font-weight: bold;">📅 {erf.get('timestamp', 'Ukendt tidspunkt')}</span><br><br>
-                    <strong>👤 Spørgsmål:</strong><br>
-                    <p style="color: #e0e1dd; margin-left: 10px; font-style: italic;">"{erf['sporgsmal']}"</p>
-                    <strong>🚢 Svar:</strong><br>
-                    <p style="color: #e0e1dd; margin-left: 10px; white-space: pre-wrap;">{erf['svar']}</p>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Slet-knap til denne specifikke erfaring
-                if st.button(f"Slet denne erfaring 🗑️", key=f"del_erf_{idx}"):
-                    erfaringer.pop(idx)
-                    # Tving nulstilling af cache og upload til OneDrive
-                    st.cache_data.clear()
-                    data_bytes = json.dumps(erfaringer, ensure_ascii=False, indent=2).encode('utf-8')
-                    if upload_to_onedrive("erfaringer.json", data_bytes, st.session_state["msal_token"]):
-                        st.success("✅ Erfaring slettet fra OneDrive!")
-                        time.sleep(0.5)
-                        st.rerun()
-                    else:
-                        st.error("❌ Kunne ikke slette erfaring fra OneDrive. Tjek forbindelsen.")
+        # Grupper erfaringer efter emne (kategori)
+        grouped_erfaringer = {}
+        for idx, erf in enumerate(erfaringer):
+            emne = erf.get("emne", "Generelt")
+            if emne not in grouped_erfaringer:
+                grouped_erfaringer[emne] = []
+            grouped_erfaringer[emne].append((idx, erf))
+            
+        # Vis grupper i Streamlit expandere
+        for emne, items in sorted(grouped_erfaringer.items()):
+            with st.expander(f"📁 {emne} ({len(items)} stk)", expanded=False):
+                for orig_idx, item in reversed(items):
+                    st.markdown(f"""
+                    <div style="background-color: #1c2541; padding: 15px; border-radius: 8px; border: 1px solid #3a506b; margin-bottom: 10px; color: #e0e1dd;">
+                        <span style="color: #5bc0be; font-size: 12px; font-weight: bold;">📅 {item.get('timestamp', 'Ukendt tidspunkt')}</span><br><br>
+                        <strong>👤 Spørgsmål:</strong><br>
+                        <p style="color: #e0e1dd; margin-left: 10px; font-style: italic;">"{item['sporgsmal']}"</p>
+                        <strong>🚢 Svar:</strong><br>
+                        <p style="color: #e0e1dd; margin-left: 10px; white-space: pre-wrap;">{item['svar']}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Slet-knap til denne specifikke erfaring
+                    if st.button(f"Slet denne erfaring 🗑️", key=f"del_erf_{orig_idx}"):
+                        erfaringer.pop(orig_idx)
+                        # Tving nulstilling af cache og upload til OneDrive
+                        st.cache_data.clear()
+                        data_bytes = json.dumps(erfaringer, ensure_ascii=False, indent=2).encode('utf-8')
+                        if upload_to_onedrive("erfaringer.json", data_bytes, st.session_state["msal_token"]):
+                            st.success("✅ Erfaring slettet fra OneDrive!")
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error("❌ Kunne ikke slette erfaring fra OneDrive. Tjek forbindelsen.")
+
