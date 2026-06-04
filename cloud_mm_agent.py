@@ -477,7 +477,7 @@ with tab1:
         st.session_state["messages"] = []
 
     # Vis tidligere beskeder
-    for msg in st.session_state["messages"]:
+    for idx, msg in enumerate(st.session_state["messages"]):
         role_class = "chat-bubble-user" if msg["role"] == "user" else "chat-bubble-agent"
         role_name = "Dig" if msg["role"] == "user" else "Overmaskinmesteren"
         st.markdown(f"""
@@ -486,8 +486,26 @@ with tab1:
                 {msg["content"]}
             </div>
         """, unsafe_allow_html=True)
-        if "sources" in msg and msg["sources"]:
-            st.write(f"<span style='font-size: 12px; color: #888;'>📚 Kilder: {', '.join(msg['sources'])}</span>", unsafe_allow_html=True)
+        
+        if msg["role"] == "assistant":
+            if "sources" in msg and msg["sources"]:
+                st.write(f"<span style='font-size: 12px; color: #888;'>📚 Kilder: {', '.join(msg['sources'])}</span>", unsafe_allow_html=True)
+            
+            # Knap til aktivt at gemme som erfaring
+            if idx > 0 and st.session_state["messages"][idx-1]["role"] == "user":
+                sporgsmal = st.session_state["messages"][idx-1]["content"]
+                svar = msg["content"]
+                
+                is_saved = any(erf.get("sporgsmal") == sporgsmal for erf in erfaringer)
+                
+                if is_saved:
+                    st.markdown("<span style='font-size: 12px; color: #5bc0be; font-weight: bold; display: inline-block; margin-bottom: 10px;'>💾 Gemt som erfaring ✓</span>", unsafe_allow_html=True)
+                else:
+                    if st.button("Gem som erfaring 💾", key=f"save_erf_{idx}"):
+                        gem_erfaring_onedrive(sporgsmal, svar, st.session_state["msal_token"])
+                        st.success("✅ Erfaring gemt på OneDrive!")
+                        time.sleep(0.5)
+                        st.rerun()
 
     # Inputfelt
     if prompt := st.chat_input("Hvad oplever du af udfordringer i maskinrummet i dag?"):
@@ -543,8 +561,6 @@ SVAR:"""
                         "sources": sources
                     })
                     
-                    # Gem erfaringen i OneDrive databasen til mekanisk selvlæring
-                    gem_erfaring_onedrive(prompt, svar_tekst, st.session_state["msal_token"])
                     st.rerun()
                     
                 except Exception as e:
